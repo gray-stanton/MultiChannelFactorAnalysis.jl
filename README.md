@@ -10,7 +10,7 @@ Arguments:
 1. *data*: A 3-way ragged array, whose first axis is sample, second axis is channel, and third axis observation 
 2. *Ls*: Number of observations per channel
 3. *p*: Number of common factors to fit
-4. *pjs*: Array whose $i$th entry is the number of unique factors for channel $i$
+4. *pjs*: Array whose *i*th entry is the number of unique factors for channel *i*
 
 Optional arguments are *tol* and *maxiter*.
 
