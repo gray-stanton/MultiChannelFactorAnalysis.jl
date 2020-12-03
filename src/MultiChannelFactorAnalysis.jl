@@ -1,5 +1,10 @@
 module MultiChannelFactorAnalysis
 
-greet() = print("Hello World!")
+using Distributions
+using LinearAlgebra
+using DataFrames
 
+include("utils.jl")
+include("MCFM.jl")
+include("MCFMSim.jl")
 end # module
