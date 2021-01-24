@@ -21,6 +21,7 @@ function Hstep(S :: Symmetric, G, Σ, p)
 
 
     Hnew = B * Q
+    Hnew = Array{Float64, 2}(Hnew)
     return Hnew
 end
 
@@ -63,7 +64,7 @@ end
 
 
 
-function fitMFA(data, Ls, p, pjs; tol=1e-6, maxiter=1e6)
+function fitMFA(data, Ls, p, pjs; tol=1e-4, maxiter=1e6)
     # Data is assumed to be in a ragged 3d array structure: sample x channel x observation
     X, Xobs, Xchan = stack_and_view(data)
     # Remove column means

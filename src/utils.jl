@@ -1,4 +1,6 @@
 
+
+
 function LTOrthog(B, blocksize)
     Blq = lq(B[1:blocksize, 1:blocksize])
     # Extract diagonal elems, sort into descending abs val, put back in diag mat.
@@ -22,7 +24,11 @@ function extract_blocks(mat, Ls, pjs; diag=false)
     return blocks
 end
 
-
+function flip_signs(mat)
+    diag_signs = sign.(diag(mat))
+    flip= mat * diagm(diag_signs)
+    return flip
+end
 function blockdiag(blks; sparse=false)
     if sparse
         throw("unimplemented")

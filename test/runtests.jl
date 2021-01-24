@@ -1,4 +1,4 @@
-using MultiChannelFactorAnalysis: simFactor, randomLoadingNorm, randomLoadings, simData
+using MultiChannelFactorAnalysis: simFactor, randomLoadingNorm, randomLoadings, simData, MultiChannelData
 using Test
 using CSV
 
@@ -26,7 +26,17 @@ end
     lf = (l, p) ->  randomLoadingNorm(l, p; target_tr=0.3)
     Hs, Gs = randomLoadings(Ls, p, ps, lf)
     edists = vcat([repeat([Normal(0, sqrt(0.4 / L))], L) for L in Ls]...)
-    
 
 
+
+@testset "MCFMStructs" begin
+    c = 3
+    n = 10
+    nobs_per_chan = [2, 2, 1]
+    vals = [[zeros(p) for p in nobs_per_chan] for i in 1:n]
+    @test MultiChannelData(vals, c, nobs_per_chan, n).values = vals
+    @test_throws ArgumentError MultiChannelData(vals, 0, nobs_per_chan, n)
+    @test_throws ArgumentError(vals, c-1, nobs_per_chan, n)
+    @test_throws ArgumentError(vals, c, nobs_per_chan .+ 1, n )
+    @test_throws ArgumentError(vals, c, nobs_per_chan, n+1)
 end
