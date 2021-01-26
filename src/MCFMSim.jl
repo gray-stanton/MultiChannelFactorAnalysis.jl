@@ -1,4 +1,46 @@
-using LinearAlgebra
+
+function simulate(nsamples :: Int, params :: MCFMParams, factor_func, error_func)
+    if nsamples <= 0
+        throw(ArgumentError("Number of samples must be positive"))
+    end
+    factorlayout = params.factorlayout
+    channellayout = params.channellayout
+    factors = factor_func(nsamples, factorlayout) :: MultiChannelFactors
+    #TODO : errors should take Sigma from params
+    errors  = error_func(nsamples, channellayout) :: MultiChannelData
+    exactvalues  = params.loading * factors.factors
+    exactdata  = unstack(exactvalues, channellayout)
+    data = exactdata + errors
+    return data
+end
+
+
+function periodic_factors(nsamples, factorlayout::MultiChannelFactorLayout)
+    freqs = 2*π .* (1:factorlayout.nfactors)
+    factors = transpose(hcat([sin.((1:nsamples)/nsamples * f) for f in freqs ]...))
+    fcommon = factors[1:factorlayout.nchannelshared, :]
+    funique = factors[(factorlayout.nchannelshared+1):end, :]
+    out = MultiChannelFactors(factorlayout, fcommon, funique)
+    return out
+end
+
+function classical_factors(nsamples, factorlayout::MultiChannelFactorLayout)
+    # Independent N(0, 1) for all samples is classical
+    dist = Normal(0, 1)
+    factors = rand(dist, (factorlayout.nfactors, nsamples))
+    fcommon = factors[1:factorlayout.nchannelshared, :]
+    funique = factors[(factorlayout.nchannelshared+1):end, :]
+    out = MultiChannelFactors(factorlayout, fcommon, funique)
+    return out
+end
+
+function indep_gauss_errors(nsamples, channellayout::MultiChannelLayout; sd=0.1)
+    dist = Normal(0, sd)
+    errors = unstack(rand(dist, (channellayout.nobs, nsamples)), channellayout)
+    return errors
+end
+
+
 
 function simChannel(H, G, fc, fu, edist::Distribution)
     if length(edist) == 1

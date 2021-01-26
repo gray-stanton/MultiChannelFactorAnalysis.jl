@@ -1,8 +1,9 @@
 
 
-function Hstep(S :: Symmetric, G, Σ, p)
-    U = size(G)[2] # total num of unique factors
-    L = size(G)[1] # total number of obs, across all channels.
+function Hstep(S :: Symmetric, params :: MCFMParams)
+    U = params.factorlayout.nchannelspecific # total num of unique factors
+    L = params.channellayout.nobs # total number of obs, across all channels.
+    G = params.G
 
     E = G * transpose(G) + Σ # eqn 24
     Eisqrt = sqrt(inv(E)) # inefficient
@@ -44,74 +45,122 @@ function _Gstep_channel(S, H, Σ, pj)
     return Gnew
 end
 
-function Gstep(Sblocks, Hblocks, Σblocks, pjs)
-    L = sum([size(Hblock)[2] for Hblock in Hblocks])
-    u = sum(pjs)
+function Gstep(S :: Symmetric, params :: MCFMParams)
+    Sblocks = extract_diagonal_blocks(S, params.channellayout.nobs_per_channel,params.channellayout.nobs_per_channel)
+    L = params.channellayout.nobs
     Gblocks = Array{Float64, 2}[]
-    for i in 1:length(pjs)
-        Gblock = _Gstep_channel(Sblocks[i], Hblocks[i], Σblocks[i], pjs[i])
+    for i in 1:params.channellayout.nchannels
+        Gblock = _Gstep_channel(Sblocks[i],
+            params.H_by_channel[i],
+            params.Σ_by_channel[i],
+            params.factorlayout.nspecific_per_channel[i])
         push!(Gblocks, Gblock)
     end
     return blockdiag(Gblocks)
 end
 
 
-function Σstep(S, H, G)
+function Σstep(S :: Symmetric, params :: MCFMParams)
+    H = params.H
+    G = params.G
     Est = S - H * transpose(H) - G * transpose(G)
     Σnew = Matrix(Diagonal(Est)) # extract only the diagonal elems.
     return Σnew
 end
 
 
-
-function fitMFA(data, Ls, p, pjs; tol=1e-4, maxiter=1e6)
+function fit(data :: MultiChannelData, factorlayout :: MultiChannelFactorLayout; tol=1e-4, maxiter=1e6, center=true)
     # Data is assumed to be in a ragged 3d array structure: sample x channel x observation
-    X, Xobs, Xchan = stack_and_view(data)
-    # Remove column means
-    #X = X .- mean(X; dims=2) # centering is wrong.
-    # Initialize parameter matrices
-    N = length(data)
-    L = sum(Ls)
-    U = sum(pjs)
-
-    H = zeros(L, p)
-    H_old = zeros(L, p)
-    G = zeros(L, U)
-    G_old = zeros(L, U)
-    Σ = Matrix(I(L))
-    Σ_old = Matrix(I(L))
-
+    X = stack(data)
+    if center
+        X = X .- mean(X, dims=2)
+    end
+    # Initialize parameters
+    H =  zeros(data.nobs, factorlayout.nchannelshared)
+    G =  zeroes(dat.nobs, factorlayout.nchannelspecific)
+    Σ =  Matrix(I(data.nobs))
+    params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
+    fitpath = MCFMHistory(1, maxiter, tol, [params])
 
     # Compute sample cov
     S = Symmetric(1/(N-1) * X * transpose(X))
 
-    #loop vars
-    k = 0
+    iter = 1
     converged = false
-    while k < maxiter && !converged
-        H = Hstep(S, G, Σ, p)
-        Hblocks = extract_blocks(H, Ls, [p]; diag=false)
-        Sblocks = extract_blocks(S, Ls, Ls; diag=true)
-        Σblocks = extract_blocks(Σ, Ls, Ls; diag=true)
-        G = Gstep(Sblocks, Hblocks, Σblocks, pjs)
-        Σ = Σstep(S, H, G)
-        if _checkConverged(H_old, G_old, Σ_old, H, G, Σ; tol=tol)
-            converged = true
-            break
+    while iter < maxiter && !converged
+        H = Hstep(S, params)
+        params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
+        G = Gstep(S, params)
+        params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
+        Σ = Σstep(S, params)
+        params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
+        fitpath = MCFMHistory(iter, maxiter, tol, vcat(fitpat.parampath..., [params]))
+        if _checkConverged(fitpath)
+            _converged = true
+            fitpath
         end
-        k = k + 1
-        H_old = H
-        G_old = G
-        Σ_old = Σ
+        iter = iter + 1
     end
-    # Construct MFA object
-    if !converged
-        @warn "Max iteration {maxiter} reached, model has not converged"
-    end
-    return H, G, Σ
+    finalfit = MCFMFit(params, fitpath)
+    return finalfit
 end
 
-function _checkConverged(H_old, G_old, Σ_old, H_new, G_new, Σ_new; tol=1e-6)
+#
+# function fitMFA(data, Ls, p, pjs; tol=1e-4, maxiter=1e6)
+#
+#     X, Xobs, Xchan = stack_and_view(data)
+#     # Remove column means
+#     #X = X .- mean(X; dims=2) # centering is wrong.
+#     # Initialize parameter matrices
+#     N = length(data)
+#     L = sum(Ls)
+#     U = sum(pjs)
+#
+#     H = zeros(L, p)
+#     H_old = zeros(L, p)
+#     G = zeros(L, U)
+#     G_old = zeros(L, U)
+#     Σ = Matrix(I(L))
+#     Σ_old = Matrix(I(L))
+#
+#
+#     # Compute sample cov
+#     S = Symmetric(1/(N-1) * X * transpose(X))
+#
+#     #loop vars
+#     k = 0
+#     converged = false
+#     while k < maxiter && !converged
+#         H = Hstep(S, G, Σ, p)
+#         Hblocks = extract_blocks(H, Ls, [p]; diag=false)
+#         Sblocks = extract_blocks(S, Ls, Ls; diag=true)
+#         Σblocks = extract_blocks(Σ, Ls, Ls; diag=true)
+#         G = Gstep(Sblocks, Hblocks, Σblocks, pjs)
+#         Σ = Σstep(S, H, G)
+#         if _checkConverged(H_old, G_old, Σ_old, H, G, Σ; tol=tol)
+#             converged = true
+#             break
+#         end
+#         k = k + 1
+#         H_old = H
+#         G_old = G
+#         Σ_old = Σ
+#     end
+#     # Construct MFA object
+#     if !converged
+#         @warn "Max iteration {maxiter} reached, model has not converged"
+#     end
+#     return H, G, Σ
+# end
+
+function _checkConverged(fitpath :: MCFMHistory)
+    iter = fitpath.iter
+    H_old = fitpath.parampath[iter -1].H
+    G_old = fitpath.parampath[iter -1].G
+    Σ_old = fitpath.parampath[iter -1].Σ
+    H_new = fitpath.parampath[iter].H
+    G_new = fitpath.parampath[iter].G
+    Σ_new = fitpath.parampath[iter].Σ
     Hdiffsize = norm(H_new - H_old)
     Gdiffsize = norm(G_new - G_old)
     Σdiffsize = norm(Σ_new - Σ_old)
@@ -124,33 +173,75 @@ function _checkConverged(H_old, G_old, Σ_old, H_new, G_new, Σ_new; tol=1e-6)
         return false
     end
 end
+#
+# function _checkConverged(H_old, G_old, Σ_old, H_new, G_new, Σ_new; tol=1e-6)
+#
+#     Hdiffsize = norm(H_new - H_old)
+#     Gdiffsize = norm(G_new - G_old)
+#     Σdiffsize = norm(Σ_new - Σ_old)
+#     Hconv = Hdiffsize/length(H_new) <= tol
+#     Gconv = Gdiffsize/length(G_new) <= tol
+#     Σconv = Σdiffsize/size(Σ_old)[1] <= tol # diagonal
+#     if Hconv && Gconv && Σconv
+#         return true
+#     else
+#         return false
+#     end
+# end
 
-function extract_factors(H, G, Σ, X, Ls, pjs)
+function extract_factors(data :: MultiChannelData, params ::MCFMParams)
+    H = params.H
+    G = params.G
+    Σ = params.Σ
     R = H * transpose(H) + G * transpose(G) + Σ
-    #Gblks = extract_blocks(G, Ls; diag=true)
-    #Σblks = extract_blocks(G, Ls; diag=true)
-    #Xblks = extract_blocks(X, Ls; diag=false)
     Rinv = inv(R)
     fcommon = transpose(H) * inv(R) * X
-    Hblks = extract_blocks(H, Ls, 1; diag=false)
-    Gblks = extract_blocks(G, Ls, pjs; diag=true)
-    Σblks = extract_blocks(Σ, Ls, Ls; diag=true)
-    Xblks = extract_blocks(X, Ls, 1; diag=false)
-    funique = zeros(sum(pjs), size(X)[2])
-    j=0
-    for (Hi, Gi, Σi, Xi) in zip(Hblks, Gblks, Σblks, Xblks)
-        Ri = Hi * transpose(Hi) + Gi * transpose(Gi) + Σi
-        fu = transpose(Gi) * inv(Ri) * Xi
+    funique = zeros(params.factorlayout.nchannelshared, data.nsamples)
+    Xblks = extract_horizontal_blocks(X, data.channellayout.nobs_per_channel)
+    j = 0
+    for c in 1:data.channellayout.nchannels
+        Ri = H_by_channel[c] * transpose(H_by_channel[c]) + G_by_channel[c] * G_by_channel[c] + Σ_by_channel[c]
+        fu = transpose(G_by_channel[c]) * inv(Ri) * Xblks[c]
         funique[(j+1):(j+size(fu)[1]), :] = fu
         j += size(fu)[1]
     end
-    fcommon = transpose(fcommon)
-    funique = transpose(funique)
-    return fcommon, funique
+    factors = MultiChannelFactors(params.factorlayout, fcommon, funique)
+    return factors
 end
 
-function predict(H, G, Σ, X, Ls)
-    fcom, funi = extract_factors(H, G, Σ, X, Ls)
-    preds = H * transpose(fcom) + G * transpose(funi)
-    return(preds)
+
+# function extract_factors(H, G, Σ, X, Ls, pjs)
+#     R = H * transpose(H) + G * transpose(G) + Σ
+#     #Gblks = extract_blocks(G, Ls; diag=true)
+#     #Σblks = extract_blocks(G, Ls; diag=true)
+#     #Xblks = extract_blocks(X, Ls; diag=false)
+#     Rinv = inv(R)
+#     fcommon = transpose(H) * inv(R) * X
+#     Hblks = extract_blocks(H, Ls, 1; diag=false)
+#     Gblks = extract_blocks(G, Ls, pjs; diag=true)
+#     Σblks = extract_blocks(Σ, Ls, Ls; diag=true)
+#     Xblks = extract_blocks(X, Ls, 1; diag=false)
+#     funique = zeros(sum(pjs), size(X)[2])
+#     j=0
+#     for (Hi, Gi, Σi, Xi) in zip(Hblks, Gblks, Σblks, Xblks)
+#         Ri = Hi * transpose(Hi) + Gi * transpose(Gi) + Σi
+#         fu = transpose(Gi) * inv(Ri) * Xi
+#         funique[(j+1):(j+size(fu)[1]), :] = fu
+#         j += size(fu)[1]
+#     end
+#     fcommon = transpose(fcommon)
+#     funique = transpose(funique)
+#     return fcommon, funique
+# end
+
+function predict(data :: MultiChannelData, params :: MCFMParams)
+    factors = extract_factors(data, params)
+    preds = params.loading * factors.factors
+    return preds
 end
+#
+# function predict(H, G, Σ, X, Ls)
+#     fcom, funi = extract_factors(H, G, Σ, X, Ls)
+#     preds = H * (fcom) + G * transpose(funi)
+#     return(preds)
+# end

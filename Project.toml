@@ -1,7 +1,13 @@
 name = "MultiChannelFactorAnalysis"
 uuid = "5d5100fb-d4c2-4a84-ad00-15dc7ba4cddc"
 authors = ["Gray Stanton <gray@graystanton.com>"]
-version = "0.1.0"
+version = "0.1.1"
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [compat]
 julia = "1"
