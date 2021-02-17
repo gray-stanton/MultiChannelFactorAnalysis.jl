@@ -1,9 +1,29 @@
 
+function chooseFactorStructure(X :: Matrix, channel_layout :: MultiChannelLayout)
+    n = size(X)[1]
+    T = size(X)[2]
+    XtX = 1/(n-1)*transpose(X) * X
+    S   = 1/(n-1)*X * transpose(X)
+    overall_evs = reverse(eigen(XtX.values, dims=1))
+    X_by_channel = extract_horizontal_blocks(X, channel_layout.nobs_per_channel)
+    channel_evs = [reverse(eigen(transpose(Xc) * Xc).values) for Xc in X_by_channel]
+    D = blockdiag(extract_diagonal_blocks(S,   channel_layout.nobs_per_channel, channel_layout.nobs_per_channel))
+    U = S - D
+
+    off_diag_evs = reverse(eigen(XtX.values, dims=1)[T-n+1:T])
+end
+
+
+
+
+
 
 function Hstep(S :: Symmetric, params :: MCFMParams)
     U = params.factorlayout.nchannelspecific # total num of unique factors
     L = params.channellayout.nobs # total number of obs, across all channels.
     G = params.G
+    Σ = params.Σ
+    p = params.factorlayout.nchannelshared
 
     E = G * transpose(G) + Σ # eqn 24
     Eisqrt = sqrt(inv(E)) # inefficient
@@ -50,10 +70,15 @@ function Gstep(S :: Symmetric, params :: MCFMParams)
     L = params.channellayout.nobs
     Gblocks = Array{Float64, 2}[]
     for i in 1:params.channellayout.nchannels
-        Gblock = _Gstep_channel(Sblocks[i],
-            params.H_by_channel[i],
-            params.Σ_by_channel[i],
-            params.factorlayout.nspecific_per_channel[i])
+        if params.factorlayout.nspecific_per_channel[i] == 0
+            # If no channel specific factors, don't run Gstep
+            Gblock = zeros(params.channellayout.nobs_per_channel[i], 0)
+        else
+            Gblock = _Gstep_channel(Sblocks[i],
+                params.H_by_channel[i],
+                params.Σ_by_channel[i],
+                params.factorlayout.nspecific_per_channel[i])
+            end
         push!(Gblocks, Gblock)
     end
     return blockdiag(Gblocks)
@@ -76,16 +101,16 @@ function fit(data :: MultiChannelData, factorlayout :: MultiChannelFactorLayout;
         X = X .- mean(X, dims=2)
     end
     # Initialize parameters
-    H =  zeros(data.nobs, factorlayout.nchannelshared)
-    G =  zeroes(dat.nobs, factorlayout.nchannelspecific)
-    Σ =  Matrix(I(data.nobs))
+    H =  zeros(data.channellayout.nobs, factorlayout.nchannelshared)
+    G =  zeros(data.channellayout.nobs, factorlayout.nchannelspecific)
+    Σ =  Matrix(I(data.channellayout.nobs))
     params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
     fitpath = MCFMHistory(1, maxiter, tol, [params])
 
     # Compute sample cov
-    S = Symmetric(1/(N-1) * X * transpose(X))
+    S = Symmetric(1/(data.nsamples-1) * X * transpose(X))
 
-    iter = 1
+    iter = 2
     converged = false
     while iter < maxiter && !converged
         H = Hstep(S, params)
@@ -94,8 +119,8 @@ function fit(data :: MultiChannelData, factorlayout :: MultiChannelFactorLayout;
         params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
         Σ = Σstep(S, params)
         params = MCFMParams(factorlayout, data.channellayout, H, G, Σ)
-        fitpath = MCFMHistory(iter, maxiter, tol, vcat(fitpat.parampath..., [params]))
-        if _checkConverged(fitpath)
+        fitpath = MCFMHistory(iter, maxiter, tol, vcat(fitpath.parampath..., [params]))
+        if _checkConverged(fitpath, tol)
             _converged = true
             fitpath
         end
@@ -153,11 +178,11 @@ end
 #     return H, G, Σ
 # end
 
-function _checkConverged(fitpath :: MCFMHistory)
-    iter = fitpath.iter
-    H_old = fitpath.parampath[iter -1].H
-    G_old = fitpath.parampath[iter -1].G
-    Σ_old = fitpath.parampath[iter -1].Σ
+function _checkConverged(fitpath :: MCFMHistory, tol)
+    iter = fitpath.niter
+    H_old = fitpath.parampath[iter-1].H
+    G_old = fitpath.parampath[iter-1].G
+    Σ_old = fitpath.parampath[iter-1].Σ
     H_new = fitpath.parampath[iter].H
     G_new = fitpath.parampath[iter].G
     Σ_new = fitpath.parampath[iter].Σ
@@ -189,21 +214,50 @@ end
 #     end
 # end
 
-function extract_factors(data :: MultiChannelData, params ::MCFMParams)
+
+function project(data::MultiChannelData, factors::MultiChannelFactors)
+    # Project each factor onto space spanned by common + specific factors
+    X = stack(data)
+    Xblks = extract_horizontal_blocks(X, data.channellayout.nobs_per_channel)
+    Fblks = [hcat(transpose(factors.fcommon), transpose(fu)) for fu in funique_by_channel]
+    Xfitteds = Matrix{Float64}(undef, data.channellayout.nchannels)
+    for c in 1:data.channellayout.nchannels
+        Ft = transpose(F)
+        proj = Fblk[c] * pinv(Ft * F) * Ft
+        Xblkfit = proj * Xblks[c]
+        Xfitteds[c] = Xblkfit
+    end
+    Xfitted = vcat(Xfitted...)
+    out = unstack(Xfitted, data.channellayout)
+    return out
+end
+
+function extract_factors(data :: MultiChannelData, params ::MCFMParams; center=true)
     H = params.H
     G = params.G
     Σ = params.Σ
+    H_by_channel = params.H_by_channel
+    G_by_channel = params.G_by_channel
+    Σ_by_channel = params.Σ_by_channel
+    X = stack(data)
+    if center
+        X = X .- mean(X, dims=2)
+    end
     R = H * transpose(H) + G * transpose(G) + Σ
     Rinv = inv(R)
     fcommon = transpose(H) * inv(R) * X
-    funique = zeros(params.factorlayout.nchannelshared, data.nsamples)
+    funique = zeros(params.factorlayout.nchannelspecific, data.nsamples)
     Xblks = extract_horizontal_blocks(X, data.channellayout.nobs_per_channel)
     j = 0
     for c in 1:data.channellayout.nchannels
-        Ri = H_by_channel[c] * transpose(H_by_channel[c]) + G_by_channel[c] * G_by_channel[c] + Σ_by_channel[c]
-        fu = transpose(G_by_channel[c]) * inv(Ri) * Xblks[c]
-        funique[(j+1):(j+size(fu)[1]), :] = fu
-        j += size(fu)[1]
+        if params.factorlayout.nspecific_per_channel[c] == 0
+            continue
+        else
+            Ri = H_by_channel[c] * transpose(H_by_channel[c]) + G_by_channel[c] * transpose(G_by_channel[c]) + Σ_by_channel[c]
+            fu = transpose(G_by_channel[c]) * inv(Ri) * Xblks[c]
+            funique[(j+1):(j+size(fu)[1]), :] = fu
+            j += size(fu)[1]
+        end
     end
     factors = MultiChannelFactors(params.factorlayout, fcommon, funique)
     return factors
@@ -234,8 +288,7 @@ end
 #     return fcommon, funique
 # end
 
-function predict(data :: MultiChannelData, params :: MCFMParams)
-    factors = extract_factors(data, params)
+function predict(factors :: MultiChannelFactors, params :: MCFMParams)
     preds = params.loading * factors.factors
     return preds
 end

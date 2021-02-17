@@ -11,10 +11,12 @@ end
 
 
 struct MultiChannelData
-    values :: Array{Array{Array{Float64, 1}}}
+    values :: Array{Array{Array{Float64, 1}, 1}, 1}
     channellayout :: MultiChannelLayout
     nsamples :: Int
-    function check_conds(values, channellayout, nsamples)
+    obs_ids :: Array{Int, 1}
+    sample_ids :: Array{Int, 1}
+    function check_conds(values, channellayout, nsamples; obs_ids=[], sample_ids=[])
         if nsamples <= 0
             throw(ArgumentError("Must have non-zero samples"))
         elseif size(values)[1] != nsamples
@@ -24,10 +26,16 @@ struct MultiChannelData
         elseif any([any([size(c)[1] != nchan for (c, nchan) in zip(samp, channellayout.nobs_per_channel)]) for samp in values])
             throw(ArgumentError("Values don't match number of observations per channel"))
         else
-            new(values, channellayout, nsamples)
+            if length(obs_ids) == 0 && length(sample_ids) == 0
+                new(values, channellayout, nsamples, [], [])
+            else
+                new(values, channellayout, nsamples, obs_ids, sample_ids)
+            end
         end
     end
-    MultiChannelData(values, channellayout, nsamples) = check_conds(values, channellayout, nsamples)
+    #MultiChannelData(values, channellayout, nsamples) = check_conds(values, channellayout, nsamples)
+    MultiChannelData(values, channellayout, nsamples; obs_ids=[], sample_ids=[]) = check_conds(
+        values, channellayout, nsamples; obs_ids, sample_ids)
 end
 
 struct MultiChannelFactorLayout
@@ -51,7 +59,8 @@ struct MultiChannelFactors
     funique :: Matrix{Float64}
     funique_by_channel :: Array{Matrix{Float64}, 1}
     factors :: Matrix{Float64}
-    function check_conds(factorlayout, fcommon, funique)
+    sample_ids :: Array{Int, 1}
+    function check_conds(factorlayout, fcommon, funique; sample_ids)
         funique_by_channel = extract_horizontal_blocks(funique, factorlayout.nspecific_per_channel; get_view=false)
         factors = vcat(fcommon, funique)
         if size(fcommon)[1] != factorlayout.nchannelshared
@@ -66,11 +75,13 @@ struct MultiChannelFactors
             fcommon,
             funique,
             funique_by_channel,
-            factors
+            factors,
+            sample_ids
             )
         end
     end
-    MultiChannelFactors(factorlayout, fcommon, funique) = check_conds(factorlayout, fcommon, funique)
+    #MultiChannelFactors(factorlayout, fcommon, funique) = check_conds(factorlayout, fcommon, funique)
+    MultiChannelFactors(factorlayout, fcommon, funique; sample_ids=[]) = check_conds(factorlayout, fcommon, funique; sample_ids)
 end
 
 struct MCFMParams
@@ -83,15 +94,16 @@ struct MCFMParams
     G_by_channel :: Array{Matrix{Float64},1}
     Σ_by_channel :: Array{Matrix{Float64},1}
     loading :: Matrix{Float64}
-    function check_conds(factorlayout, channellayout, H, G, Σ)
+    obs_ids :: Array{Int, 1}
+    function check_conds(factorlayout, channellayout, H, G, Σ; obs_ids)
         #TODO: Validate shapes of H/G/Sig by factorlayout
         H_by_channel = extract_horizontal_blocks(H, channellayout.nobs_per_channel; get_view=false)
         G_by_channel = extract_diagonal_blocks(G, channellayout.nobs_per_channel, factorlayout.nspecific_per_channel; get_view=false)
         Σ_by_channel = extract_diagonal_blocks(Σ, channellayout.nobs_per_channel, channellayout.nobs_per_channel; get_view=false)
         loading = hcat(H, G)
-        new(factorlayout, channellayout, H, G, Σ, H_by_channel, G_by_channel, Σ_by_channel, loading)
+        new(factorlayout, channellayout, H, G, Σ, H_by_channel, G_by_channel, Σ_by_channel, loading, obs_ids)
     end
-    MCFMParams(factorlayout, channellayout, H, G, Σ) = check_conds(factorlayout, channellayout, H, G, Σ)
+    MCFMParams(factorlayout, channellayout, H, G, Σ; obs_ids=[]) = check_conds(factorlayout, channellayout, H, G, Σ; obs_ids)
 end
 
 struct MCFMHistory
